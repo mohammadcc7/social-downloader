@@ -1,110 +1,145 @@
-import 'dart:io';
-import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+name: Build Android APK
 
-void main() {
-  runApp(const MyApp());
-}
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+jobs:
+  build:
+    runs-on: ubuntu-latest
 
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'مُنزل الفيديوهات',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        primarySwatch: Colors.red,
-        useMaterial3: true,
-      ),
-      home: const DownloaderHome(),
-    );
-  }
-}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-class DownloaderHome extends StatefulWidget {
-  const DownloaderHome({super.key});
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
 
-  @override
-  State<DownloaderHome> createState() => _DownloaderHomeState();
-}
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
 
-class _DownloaderHomeState extends State<DownloaderHome> {
-  final TextEditingController _urlController = TextEditingController();
-  bool _isAudioOnly = false;
-  bool _isDownloading = false;
-  double _progress = 0.0;
-  String _statusMessage = '';
+      - name: Create Clean App
+        run: flutter create temp_app --org com.example.socialdownloader
 
-  Future<void> _startDownload() async {
-    final url = _urlController.text.trim();
-    if (url.isEmpty) {
-      setState(() {
-        _statusMessage = 'يرجى إدخال رابط أولاً!';
-      });
-      return;
-    }
+      - name: Add Packages
+        working-directory: temp_app
+        run: flutter pub add dio path_provider youtube_explode_dart
 
-    setState(() {
-      _isDownloading = true;
-      _progress = 0.0;
-      _statusMessage = 'جاري تحليل الرابط...';
-    });
+      - name: Write Main File
+        run: |
+          cat << 'EOF' > temp_app/lib/main.dart
+          import 'dart:io';
+          import 'package:flutter/material.dart';
+          import 'package:path_provider/path_provider.dart';
+          import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
-    try {
-      await Permission.storage.request();
+          void main() => runApp(const MyApp());
 
-      var yt = YoutubeExplode();
-      var video = await yt.videos.get(url);
-      var manifest = await yt.videos.streamsClient.getManifest(url);
+          class MyApp extends StatelessWidget {
+            const MyApp({super.key});
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                title: 'مُنزل الفيديوهات',
+                debugShowCheckedModeBanner: false,
+                home: const DownloaderHome(),
+              );
+            }
+          }
 
-      StreamInfo streamInfo;
-      String fileExt;
+          class DownloaderHome extends StatefulWidget {
+            const DownloaderHome({super.key});
+            @override
+            State<DownloaderHome> createState() => _DownloaderHomeState();
+          }
 
-      if (_isAudioOnly) {
-        streamInfo = manifest.audioOnly.withHighestBitrate();
-        fileExt = 'mp3';
-      } else {
-        var videoStreams = manifest.muxed.sortByVideoQuality();
-        streamInfo = videoStreams.first;
-        fileExt = 'mp4';
-      }
+          class _DownloaderHomeState extends State<DownloaderHome> {
+            final TextEditingController _urlController = TextEditingController();
+            bool _isDownloading = false;
+            String _statusMessage = '';
 
-      var stream = yt.videos.streamsClient.get(streamInfo);
-      
-      Directory? directory = Directory('/storage/emulated/0/Download');
-      if (!await directory.exists()) {
-        directory = await getExternalStorageDirectory();
-      }
+            Future<void> _startDownload() async {
+              final url = _urlController.text.trim();
+              if (url.isEmpty) {
+                setState(() => _statusMessage = 'يرجى إدخال رابط أولاً!');
+                return;
+              }
+              setState(() {
+                _isDownloading = true;
+                _statusMessage = 'جاري التحميل...';
+              });
+              try {
+                var yt = YoutubeExplode();
+                var video = await yt.videos.get(url);
+                var manifest = await yt.videos.streamsClient.getManifest(url);
+                var streamInfo = manifest.muxed.sortByVideoQuality().first;
+                var stream = yt.videos.streamsClient.get(streamInfo);
+                
+                Directory? directory = Directory('/storage/emulated/0/Download');
+                if (!await directory.exists()) {
+                  directory = await getExternalStorageDirectory();
+                }
 
-      String cleanTitle = video.title.replaceAll(RegExp(r'[^\w\s]+'), '');
-      final filePath = '${directory!.path}/$cleanTitle.$fileExt';
-      final file = File(filePath);
-      final fileStream = file.openWrite();
+                String cleanTitle = video.title.replaceAll(RegExp(r'[^\w\s]+'), '');
+                final file = File('${directory!.path}/$cleanTitle.mp4');
+                var sink = file.openWrite();
+                await for (var data in stream) {
+                  sink.add(data);
+                }
+                await sink.close();
+                yt.close();
+                setState(() => _statusMessage = 'تم الحفظ في مجلد التنزيلات بنجاح!');
+              } catch (e) {
+                setState(() => _statusMessage = 'خطأ: $e');
+              } finally {
+                setState(() => _isDownloading = false);
+              }
+            }
 
-      var count = 0;
-      var total = streamInfo.size.totalBytes;
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(title: const Text('مُنزل الفيديوهات')),
+                body: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      TextField(
+                        controller: _urlController,
+                        decoration: const InputDecoration(labelText: 'أدخل رابط يوتيوب', border: OutlineInputBorder()),
+                      ),
+                      const SizedBox(height: 20),
+                      ElevatedButton(
+                        onPressed: _isDownloading ? null : _startDownload,
+                        child: Text(_isDownloading ? 'جاري التنزيل...' : 'تحميل الفيديو'),
+                      ),
+                      const SizedBox(height: 20),
+                      Text(_statusMessage, textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+              );
+            }
+          }
+          EOF
 
-      setState(() {
-        _statusMessage = 'جاري التنزيل...';
-      });
+      - name: Build APK
+        working-directory: temp_app
+        run: flutter build apk --release
 
-      await for (final data in stream) {
-        count += data.length;
-        fileStream.add(data);
-        setState(() {
-          _progress = count / total;
-        });
-      }
-
-      await fileStream.flush();
-      await fileStream.close();
-      yt.close();
-
-      setState(() {
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SocialMediaDownloader-APK
+          path: temp_app/build/app/outputs/flutter-apk/app-release.apk
         _statusMessage = 'تم التحميل بنجاح وحفظه في مجلد Downloads!';
       });
     } catch (e) {
