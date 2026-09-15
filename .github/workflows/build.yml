@@ -25,15 +25,30 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Install Dependencies
-        run: flutter pub get
+      # إنشاء هيكلية مشروع أندرويد تلقائياً وتجميع الأكواد
+      - name: Create Flutter Project Structure
+        run: |
+          mkdir temp_app
+          cd temp_app
+          flutter create . --org com.example.socialdownloader
+          cp -f ../pubspec.yaml ./pubspec.yaml
+          cp -f ../lib/main.dart ./lib/main.dart
 
-      - name: Build APK
-        run: flutter build apk --release
+      # إضافة أذونات التخزين والإنترنت في AndroidManifest.xml
+      - name: Add Android Permissions
+        run: |
+          sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>' temp_app/android/app/src/main/AndroidManifest.xml
 
+      # بناء ملف APK
+      - name: Install Dependencies & Build APK
+        run: |
+          cd temp_app
+          flutter pub get
+          flutter build apk --release
+
+      # رفع ملف الـ APK لتنزيله
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: SocialMediaDownloader-APK
-          path: build/app/outputs/flutter-apk/app-release.apk
-
+          path: temp_app/build/app/outputs/flutter-apk/app-release.apk
