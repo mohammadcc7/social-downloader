@@ -36,7 +36,15 @@ jobs:
         run: |
           sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>' temp_app/android/app/src/main/AndroidManifest.xml
 
-      # كتابة كود الواجهة والتحميل البرمجي السليم مباشرة عبر السيرفر لتجنب أخطاء النقل
+      # رفع إصدار الـ compileSdk إلى 37 في ملف الـ build.gradle ليتوافق مع المكتبات الحديثة
+      - name: Update Compile SDK to 37
+        run: |
+          sed -i 's/compileSdkVersion.*/compileSdkVersion 37/g' temp_app/android/app/build.gradle || true
+          sed -i 's/flutter.compileSdkVersion.*/compileSdkVersion = 37/g' temp_app/android/app/build.gradle || true
+          if ! grep -q "compileSdkVersion 37" temp_app/android/app/build.gradle; then
+            echo "android { compileSdkVersion 37 }" >> temp_app/android/app/build.gradle
+          fi
+
       - name: Write Clean Main Dart File
         run: |
           cat << 'EOF' > temp_app/lib/main.dart
@@ -104,6 +112,142 @@ jobs:
                 var manifest = await yt.videos.streamsClient.getManifest(url);
 
                 StreamInfo streamInfo;
+                String fileExt;
+
+                if (_isAudioOnly) {
+                  streamInfo = manifest.audioOnly.withHighestBitrate();
+                  fileExt = 'mp3';
+                } else {
+                  var videoStreams = manifest.muxed.sortByVideoQuality();
+                  streamInfo = videoStreams.first;
+                  fileExt = 'mp4';
+                }
+
+                var stream = yt.videos.streamsClient.get(streamInfo);
+                
+                Directory? directory = Directory('/storage/emulated/0/Download');
+                if (!await directory.exists()) {
+                  directory = await getExternalStorageDirectory();
+                }
+
+                String cleanTitle = video.title.replaceAll(RegExp(r'[^\w\s]+'), '');
+                final filePath = '${directory!.path}/$cleanTitle.$fileExt';
+                final file = File(filePath);
+                final fileStream = file.openWrite();
+
+                var count = 0;
+                var total = streamInfo.size.totalBytes;
+
+                setState(() {
+                  _statusMessage = 'جاري التنزيل...';
+                });
+
+                await for (final data in stream) {
+                  count += data.length;
+                  fileStream.add(data);
+                  setState(() {
+                    _progress = count / total;
+                  });
+                }
+
+                await fileStream.flush();
+                await fileStream.close();
+                yt.close();
+
+                setState(() {
+                  _statusMessage = 'تم التحميل بنجاح وحفظه في مجلد Downloads!';
+                });
+              } catch (e) {
+                setState(() {
+                  _statusMessage = 'حدث خطأ أثناء التحميل: $e';
+                });
+              } finally {
+                setState(() {
+                  _isDownloading = false;
+                });
+              }
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(
+                  title: const Text('مُنزل الفيديوهات والصوتيات'),
+                  centerTitle: true,
+                ),
+                body: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      TextField(
+                        controller: _urlController,
+                        decoration: const InputDecoration(
+                          labelText: 'أدخل رابط الفيديو',
+                          hintText: 'https://...',
+                          border: OutlineInputBorder(),
+                          prefixIcon: Icon(Icons.link),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          FilterChip(
+                            label: const Text('فيديو (MP4)'),
+                            selected: !_isAudioOnly,
+                            onSelected: (val) => setState(() => _isAudioOnly = false),
+                          ),
+                          const SizedBox(width: 12),
+                          FilterChip(
+                            label: const Text('صوت (MP3)'),
+                            selected: _isAudioOnly,
+                            onSelected: (val) => setState(() => _isAudioOnly = true),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 20),
+                      ElevatedButton.icon(
+                        onPressed: _isDownloading ? null : _startDownload,
+                        icon: const Icon(Icons.download),
+                        label: Text(_isDownloading ? 'جاري التحميل...' : 'بدء التنزيل'),
+                        style: ElevatedButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+                        ),
+                      ),
+                      const SizedBox(height: 24),
+                      if (_isDownloading) ...[
+                        LinearProgressIndicator(value: _progress),
+                        const SizedBox(height: 12),
+                        Text('${(_progress * 100).toStringAsFixed(1)}%'),
+                      ],
+                      const SizedBox(height: 12),
+                      Text(
+                        _statusMessage,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+          }
+          EOF
+
+      - name: Clean Project
+        working-directory: temp_app
+        run: flutter clean
+
+      - name: Build APK
+        working-directory: temp_app
+        run: flutter build apk --release
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SocialMediaDownloader-APK
+          path: temp_app/build/app/outputs/flutter-apk/app-release.apk
                 String fileExt;
 
                 if (_isAudioOnly) {
