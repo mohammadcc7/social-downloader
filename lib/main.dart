@@ -55,7 +55,6 @@ class _DownloaderHomeState extends State<DownloaderHome> {
     });
 
     try {
-      // طلب إذن التخزين
       await Permission.storage.request();
 
       var yt = YoutubeExplode();
@@ -69,19 +68,19 @@ class _DownloaderHomeState extends State<DownloaderHome> {
         streamInfo = manifest.audioOnly.withHighestBitrate();
         fileExt = 'mp3';
       } else {
-        streamInfo = manifest.muxed.withHighestVideoQuality();
+        // التعديل هنا لاستخراج أعلى جودة فيديو متوافقة مع الإصدارات الحديثة
+        var videoStreams = manifest.muxed.sortByVideoQuality();
+        streamInfo = videoStreams.first;
         fileExt = 'mp4';
       }
 
       var stream = yt.videos.streamsClient.get(streamInfo);
       
-      // تحديد مجلد التخزين على الجهاز
       Directory? directory = Directory('/storage/emulated/0/Download');
       if (!await directory.exists()) {
         directory = await getExternalStorageDirectory();
       }
 
-      // تنظيف اسم الملف من الرموز التي قد تسبب مشكلة في التسمية
       String cleanTitle = video.title.replaceAll(RegExp(r'[^\w\s]+'), '');
       final filePath = '${directory!.path}/$cleanTitle.$fileExt';
       final file = File(filePath);
@@ -105,6 +104,86 @@ class _DownloaderHomeState extends State<DownloaderHome> {
       await fileStream.flush();
       await fileStream.close();
       yt.close();
+
+      setState(() {
+        _statusMessage = 'تم التحميل بنجاح وحفظه في مجلد Downloads!';
+      });
+    } catch (e) {
+      setState(() {
+        _statusMessage = 'حدث خطأ أثناء التحميل: $e';
+      });
+    } finally {
+      setState(() {
+        _isDownloading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('مُنزل الفيديوهات والصوتيات'),
+        centerTitle: true,
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            TextField(
+              controller: _urlController,
+              decoration: const InputDecoration(
+                labelText: 'أدخل رابط الفيديو',
+                hintText: 'https://...',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.link),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                FilterChip(
+                  label: const Text('فيديو (MP4)'),
+                  selected: !_isAudioOnly,
+                  onSelected: (val) => setState(() => _isAudioOnly = false),
+                ),
+                const SizedBox(width: 12),
+                FilterChip(
+                  label: const Text('صوت (MP3)'),
+                  selected: _isAudioOnly,
+                  onSelected: (val) => setState(() => _isAudioOnly = true),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: _isDownloading ? null : _startDownload,
+              icon: const Icon(Icons.download),
+              label: Text(_isDownloading ? 'جاري التحميل...' : 'بدء التنزيل'),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+              ),
+            ),
+            const SizedBox(height: 24),
+            if (_isDownloading) ...[
+              LinearProgressIndicator(value: _progress),
+              const SizedBox(height: 12),
+              Text('${(_progress * 100).toStringAsFixed(1)}%'),
+            ],
+            const SizedBox(height: 12),
+            Text(
+              _statusMessage,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
       setState(() {
         _statusMessage = 'تم التحميل بنجاح وحفظه في مجلد Downloads!';
